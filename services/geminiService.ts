@@ -2,13 +2,9 @@
 import { GoogleGenAI, Modality, Type } from "@google/genai";
 import type { PictureBookStyle, BookPage } from '../types';
 
-// Fix: Use process.env.API_KEY to align with @google/genai coding guidelines for API key handling.
-const apiKey = process.env.API_KEY;
-if (!apiKey) {
-    throw new Error("API_KEY environment variable is not set. Please set it in your deployment settings.");
-}
-
-const ai = new GoogleGenAI({ apiKey });
+// Fix: Initialize GoogleGenAI client directly with process.env.API_KEY as per the coding guidelines.
+// The API key's availability is assumed to be handled externally.
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 const fileToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
