@@ -1,0 +1,10 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: 'Noto Sans JP', sans-serif;
+}
+h1, h2, h3, .font-mplus {
+  font-family: 'Mochiy Pop One', sans-serif;
+}
