@@ -6,6 +6,11 @@ import type { PictureBookStyle, BookPage } from '../types';
 // The API key's availability is assumed to be handled externally.
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
+const MAX_RETRIES = 3;
+const INITIAL_DELAY_MS = 2000;
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 const fileToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -18,37 +23,46 @@ const fileToBase64 = (file: File): Promise<string> => {
 const generateStory = async (theme: string, numPages: number): Promise<string[]> => {
     const prompt = `あなたは子供向けの絵本作家です。以下のテーマを元に、${numPages}ページの短い絵本の物語を作成してください。\nテーマ： ${theme}`;
     
-    const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: prompt,
-        config: {
-            responseMimeType: "application/json",
-            responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                    pages: {
-                        type: Type.ARRAY,
-                        items: {
-                            type: Type.STRING,
-                            description: "絵本の1ページ分の文章。",
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        try {
+            const response = await ai.models.generateContent({
+                model: "gemini-2.5-flash",
+                contents: prompt,
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: Type.OBJECT,
+                        properties: {
+                            pages: {
+                                type: Type.ARRAY,
+                                items: {
+                                    type: Type.STRING,
+                                    description: "絵本の1ページ分の文章。",
+                                },
+                            },
                         },
+                        required: ["pages"],
                     },
                 },
-                required: ["pages"],
-            },
-        },
-    });
+            });
 
-    try {
-        const result = JSON.parse(response.text);
-        if (result.pages && Array.isArray(result.pages) && result.pages.length > 0) {
-            return result.pages;
+            const result = JSON.parse(response.text);
+            if (result.pages && Array.isArray(result.pages) && result.pages.length > 0) {
+                return result.pages;
+            }
+            throw new Error("AIが物語を生成できませんでした。");
+
+        } catch (error) {
+            if (error instanceof Error && error.message.includes('503') && attempt < MAX_RETRIES - 1) {
+                console.warn(`Story generation failed (attempt ${attempt + 1}/${MAX_RETRIES}). Retrying in ${INITIAL_DELAY_MS * 2 ** attempt}ms...`);
+                await sleep(INITIAL_DELAY_MS * 2 ** attempt);
+            } else {
+                console.error("Error generating story after retries:", error);
+                 throw new Error("物語の生成に失敗しました。AIが混み合っている可能性があるため、しばらくしてからもう一度お試しください。");
+            }
         }
-        throw new Error("AIが物語を生成できませんでした。");
-    } catch (e) {
-        console.error("Error parsing story from Gemini:", e);
-        throw new Error("物語の生成に失敗しました。テーマを変えて試してみてください。");
     }
+    throw new Error("物語の生成に失敗しました。AIが応答しませんでした。");
 };
 
 
@@ -77,36 +91,49 @@ export const generatePictureBook = async (
 子供たちが見てわくわくするような、カラフルで魅力的な絵にしてください。
 重要：生成する画像には、いかなる文字やテキストも絶対に含めないでください。イラストのみを生成してください。`;
 
-    try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash-image-preview',
-            contents: {
-                parts: [
-                    { inlineData: { data: originalImageBase64, mimeType: characterImage.type } },
-                    { text: prompt },
-                ],
-            },
-            config: {
-                responseModalities: [Modality.IMAGE, Modality.TEXT],
-            },
-        });
-        
-        const imagePart = response.candidates?.[0]?.content?.parts.find(part => part.inlineData);
-
-        if (imagePart && imagePart.inlineData) {
-            pages.push({
-                id: i,
-                text: storyPart,
-                imageUrl: `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`,
-                originalImageBase64: originalImageBase64,
-                originalImageMimeType: characterImage.type,
+    let pageGenerated = false;
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        try {
+            const response = await ai.models.generateContent({
+                model: 'gemini-2.5-flash-image-preview',
+                contents: {
+                    parts: [
+                        { inlineData: { data: originalImageBase64, mimeType: characterImage.type } },
+                        { text: prompt },
+                    ],
+                },
+                config: {
+                    responseModalities: [Modality.IMAGE, Modality.TEXT],
+                },
             });
-        } else {
-            console.warn(`Page ${i + 1} の画像生成に失敗しました。`);
+            
+            const imagePart = response.candidates?.[0]?.content?.parts.find(part => part.inlineData);
+
+            if (imagePart && imagePart.inlineData) {
+                pages.push({
+                    id: i,
+                    text: storyPart,
+                    imageUrl: `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`,
+                    originalImageBase64: originalImageBase64,
+                    originalImageMimeType: characterImage.type,
+                });
+                pageGenerated = true;
+                break; 
+            } else {
+                console.warn(`Page ${i + 1} の画像生成に失敗しましたが、リトライします。 (Attempt ${attempt + 1})`);
+            }
+        } catch (error) {
+            if (error instanceof Error && error.message.includes('503') && attempt < MAX_RETRIES - 1) {
+                console.warn(`Page ${i + 1} generation failed (attempt ${attempt + 1}/${MAX_RETRIES}). Retrying in ${INITIAL_DELAY_MS * 2 ** attempt}ms...`);
+                await sleep(INITIAL_DELAY_MS * 2 ** attempt);
+            } else {
+                 console.error(`Error generating page ${i + 1} after retries:`, error);
+                 throw new Error(`ページ ${i + 1} の生成中にエラーが発生しました。AIが混み合っている可能性があります。`);
+            }
         }
-    } catch (error) {
-        console.error(`Error generating page ${i + 1}:`, error);
-        throw new Error(`ページ ${i + 1} の生成中にエラーが発生しました。`);
+    }
+     if (!pageGenerated) {
+        throw new Error(`ページ ${i + 1} の生成に複数回失敗しました。`);
     }
   }
 
@@ -126,23 +153,36 @@ export const regeneratePageImage = async (
 先ほどとは少し違う、新しいアイデアで描いてみてください。子供たちがもっと驚くような、クリエイティブな絵をお願いします。
 重要：生成する画像には、いかなる文字やテキストも絶対に含めないでください。イラストのみを生成してください。`;
 
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image-preview',
-        contents: {
-            parts: [
-                { inlineData: { data: originalImageBase64, mimeType: originalImageMimeType } },
-                { text: prompt },
-            ],
-        },
-        config: {
-            responseModalities: [Modality.IMAGE, Modality.TEXT],
-        },
-    });
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        try {
+            const response = await ai.models.generateContent({
+                model: 'gemini-2.5-flash-image-preview',
+                contents: {
+                    parts: [
+                        { inlineData: { data: originalImageBase64, mimeType: originalImageMimeType } },
+                        { text: prompt },
+                    ],
+                },
+                config: {
+                    responseModalities: [Modality.IMAGE, Modality.TEXT],
+                },
+            });
 
-    const imagePart = response.candidates?.[0]?.content?.parts.find(part => part.inlineData);
-    if (imagePart && imagePart.inlineData) {
-        return `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`;
+            const imagePart = response.candidates?.[0]?.content?.parts.find(part => part.inlineData);
+            if (imagePart && imagePart.inlineData) {
+                return `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`;
+            }
+            throw new Error('画像の再生成で有効な画像部分が返されませんでした。');
+        } catch (error) {
+             if (error instanceof Error && error.message.includes('503') && attempt < MAX_RETRIES - 1) {
+                console.warn(`Image regeneration failed (attempt ${attempt + 1}/${MAX_RETRIES}). Retrying in ${INITIAL_DELAY_MS * 2 ** attempt}ms...`);
+                await sleep(INITIAL_DELAY_MS * 2 ** attempt);
+            } else {
+                console.error("Error regenerating image after retries:", error);
+                 throw new Error("画像の再生成に失敗しました。AIが混み合っている可能性があるため、しばらくしてからもう一度お試しください。");
+            }
+        }
     }
     
-    throw new Error('画像の再生成に失敗しました。');
+    throw new Error('画像の再生成に失敗しました。AIが応答しませんでした。');
 };
