@@ -1,0 +1,5 @@
+{
+  "name": "AI Picture Book Maker",
+  "description": "An AI-powered application that automatically generates personalized picture books from text provided by users (parents, educators) and drawings made by children. This product aims to stimulate creativity and give children the joy of seeing their ideas take shape.",
+  "requestFramePermissions": []
+}
