@@ -11,6 +11,36 @@ const INITIAL_DELAY_MS = 2000;
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+/**
+ * Robustly checks if an error is a retryable 503 "model overloaded" error.
+ * This version avoids `instanceof Error` to handle custom error objects thrown by the SDK
+ * and defensively checks the structure of the error object and its message property.
+ * @param error The error object to check, of unknown type.
+ * @returns True if the error is a retryable 503 error, false otherwise.
+ */
+const isRetryableError = (error: unknown): boolean => {
+  // Check if error is an object with a string 'message' property
+  if (typeof error === 'object' && error !== null && 'message' in error && typeof (error as { message: unknown }).message === 'string') {
+    const message = (error as { message: string }).message;
+    
+    // Try to parse the message as JSON, which is the most reliable method
+    try {
+      const parsed = JSON.parse(message);
+      // Use == for a more lenient check (handles "503" vs 503)
+      if (parsed?.error?.code == 503) {
+        return true;
+      }
+    } catch {
+      // If JSON parsing fails, fall back to a simple but effective string check
+      if (message.includes('503') || message.includes('overloaded')) {
+        return true;
+      }
+    }
+  }
+  return false;
+};
+
+
 const fileToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -53,7 +83,7 @@ const generateStory = async (theme: string, numPages: number): Promise<string[]>
             throw new Error("AIが物語を生成できませんでした。");
 
         } catch (error) {
-            if (error instanceof Error && error.message.includes('503') && attempt < MAX_RETRIES - 1) {
+            if (isRetryableError(error) && attempt < MAX_RETRIES - 1) {
                 console.warn(`Story generation failed (attempt ${attempt + 1}/${MAX_RETRIES}). Retrying in ${INITIAL_DELAY_MS * 2 ** attempt}ms...`);
                 await sleep(INITIAL_DELAY_MS * 2 ** attempt);
             } else {
@@ -123,7 +153,7 @@ export const generatePictureBook = async (
                 console.warn(`Page ${i + 1} の画像生成に失敗しましたが、リトライします。 (Attempt ${attempt + 1})`);
             }
         } catch (error) {
-            if (error instanceof Error && error.message.includes('503') && attempt < MAX_RETRIES - 1) {
+            if (isRetryableError(error) && attempt < MAX_RETRIES - 1) {
                 console.warn(`Page ${i + 1} generation failed (attempt ${attempt + 1}/${MAX_RETRIES}). Retrying in ${INITIAL_DELAY_MS * 2 ** attempt}ms...`);
                 await sleep(INITIAL_DELAY_MS * 2 ** attempt);
             } else {
@@ -174,7 +204,7 @@ export const regeneratePageImage = async (
             }
             throw new Error('画像の再生成で有効な画像部分が返されませんでした。');
         } catch (error) {
-             if (error instanceof Error && error.message.includes('503') && attempt < MAX_RETRIES - 1) {
+             if (isRetryableError(error) && attempt < MAX_RETRIES - 1) {
                 console.warn(`Image regeneration failed (attempt ${attempt + 1}/${MAX_RETRIES}). Retrying in ${INITIAL_DELAY_MS * 2 ** attempt}ms...`);
                 await sleep(INITIAL_DELAY_MS * 2 ** attempt);
             } else {
