@@ -2,9 +2,15 @@
 import { GoogleGenAI, Modality, Type } from "@google/genai";
 import type { PictureBookStyle, BookPage } from '../types';
 
-// Fix: Initialize GoogleGenAI client directly with process.env.API_KEY as per the coding guidelines.
-// The API key's availability is assumed to be handled externally.
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// The API key MUST be obtained exclusively from the environment variable `process.env.API_KEY`.
+// Vite configuration (`vite.config.ts`) is set up to replace `process.env.API_KEY` with the actual value at build time.
+const apiKey = process.env.API_KEY;
+if (!apiKey) {
+  // This error will be thrown during the build process if the API_KEY is not set,
+  // or in the browser if the environment variable is not properly configured.
+  throw new Error("API_KEY is not defined. Please ensure it is set in your environment variables.");
+}
+const ai = new GoogleGenAI({ apiKey });
 
 const MAX_RETRIES = 3;
 const INITIAL_DELAY_MS = 2000;
