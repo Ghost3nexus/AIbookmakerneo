@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Modality, Type } from "@google/genai";
-import type { PictureBookStyle, BookPage } from '../types';
+import type { PictureBookStyle, BookPage, OriginalImage } from '../types';
 
 let ai: GoogleGenAI | null = null;
 
@@ -60,13 +60,19 @@ const isRetryableError = (error: unknown): boolean => {
 };
 
 
-const fileToBase64 = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.readAsDataURL(file);
-        reader.onload = () => resolve((reader.result as string).split(',')[1]);
-        reader.onerror = error => reject(error);
+const filesToOriginalImages = (files: File[]): Promise<OriginalImage[]> => {
+    const promises = files.map(file => {
+        return new Promise<OriginalImage>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = () => resolve({
+                base64: (reader.result as string).split(',')[1],
+                mimeType: file.type
+            });
+            reader.onerror = error => reject(error);
+        });
     });
+    return Promise.all(promises);
 };
 
 const generateStory = async (theme: string, numPages: number): Promise<string[]> => {
@@ -121,7 +127,7 @@ const generateStory = async (theme: string, numPages: number): Promise<string[]>
 
 export const generatePictureBook = async (
   theme: string,
-  characterImage: File,
+  characterImages: File[],
   style: PictureBookStyle,
   numPages: number
 ): Promise<BookPage[]> => {
@@ -135,14 +141,14 @@ export const generatePictureBook = async (
   console.log(`DEBUG: Successfully generated ${storyParts.length} story parts.`);
 
   const pages: BookPage[] = [];
-  const originalImageBase64 = await fileToBase64(characterImage);
-  console.log("DEBUG: Character image converted to Base64.");
+  const originalImages = await filesToOriginalImages(characterImages);
+  console.log(`DEBUG: ${originalImages.length} character image(s) converted to Base64.`);
   
   for (let i = 0; i < storyParts.length; i++) {
     const storyPart = storyParts[i];
     
-    const prompt = `あなたは絵本作家兼イラストレーターです。提供された子供の絵に描かれているキャラクターを使って、物語に合った絵本の1ページを作成してください。
-元の絵のキャラクターの見た目や雰囲気を尊重し、物語の場面に合わせてポーズや表情を変えてください。
+    const prompt = `あなたは絵本作家兼イラストレーターです。提供された子供の絵に描かれているキャラクターたちを使って、物語に合った絵本の1ページを作成してください。
+元の絵のキャラクターたちの見た目や雰囲気を尊重し、物語の場面に合わせてポーズや表情を変えてください。複数のキャラクターがいる場合は、お互いに関わり合うように描いてください。
 絵本のスタイルは「${style}」でお願いします。
 このページの物語は以下の通りです: 「${storyPart}」
 子供たちが見てわくわくするような、カラフルで魅力的な絵にしてください。
@@ -153,11 +159,15 @@ export const generatePictureBook = async (
     let pageGenerated = false;
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
         try {
+            const imageParts = originalImages.map(img => ({
+                inlineData: { data: img.base64, mimeType: img.mimeType }
+            }));
+
             const response = await getAiInstance().models.generateContent({
                 model: 'gemini-2.5-flash-image-preview',
                 contents: {
                     parts: [
-                        { inlineData: { data: originalImageBase64, mimeType: characterImage.type } },
+                        ...imageParts,
                         { text: prompt },
                     ],
                 },
@@ -175,8 +185,7 @@ export const generatePictureBook = async (
                     id: i,
                     text: storyPart,
                     imageUrl: `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`,
-                    originalImageBase64: originalImageBase64,
-                    originalImageMimeType: characterImage.type,
+                    originalImages: originalImages,
                 };
                 pages.push(newPage);
                 console.log(`DEBUG: [Page ${i + 1}] Successfully created page data.`, newPage);
@@ -207,12 +216,11 @@ export const generatePictureBook = async (
 
 export const regeneratePageImage = async (
     storyPart: string,
-    originalImageBase64: string,
-    originalImageMimeType: string,
+    originalImages: OriginalImage[],
     style: PictureBookStyle
 ): Promise<string> => {
-    const prompt = `あなたは絵本作家兼イラストレーターです。子供が描いた絵と物語の一部を元に、素晴らしい絵本の1ページを「再生成」してください。
-元の絵のキャラクターや雰囲気を尊重しつつ、物語に合わせてプロのイラストレーターのように描き直してください。
+    const prompt = `あなたは絵本作家兼イラストレーターです。子供たちが描いた複数の絵と物語の一部を元に、素晴らしい絵本の1ページを「再生成」してください。
+元の絵のキャラクターたちの雰囲気や特徴を尊重しつつ、物語に合わせてプロのイラストレーターのように描き直してください。
 絵本のスタイルは「${style}」でお願いします。
 このページの物語は以下の通りです: 「${storyPart}」
 先ほどとは少し違う、新しいアイデアで描いてみてください。子供たちがもっと驚くような、クリエイティブな絵をお願いします。
@@ -222,11 +230,15 @@ export const regeneratePageImage = async (
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
         try {
+            const imageParts = originalImages.map(img => ({
+                inlineData: { data: img.base64, mimeType: img.mimeType }
+            }));
+
             const response = await getAiInstance().models.generateContent({
                 model: 'gemini-2.5-flash-image-preview',
                 contents: {
                     parts: [
-                        { inlineData: { data: originalImageBase64, mimeType: originalImageMimeType } },
+                        ...imageParts,
                         { text: prompt },
                     ],
                 },

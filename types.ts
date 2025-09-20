@@ -1,4 +1,5 @@
 
+
 export enum PictureBookStyle {
   Watercolor = '水彩画風',
   Crayon = 'クレヨン画風',
@@ -13,12 +14,16 @@ export interface StyleOption {
   name: string;
 }
 
+export interface OriginalImage {
+  base64: string;
+  mimeType: string;
+}
+
 export interface BookPage {
   id: number;
   text: string;
   imageUrl: string;
-  originalImageBase64: string;
-  originalImageMimeType: string;
+  originalImages: OriginalImage[];
 }
 
 export enum AppStep {

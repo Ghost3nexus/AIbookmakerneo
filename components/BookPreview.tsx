@@ -3,6 +3,9 @@ import React, { useState, useCallback } from 'react';
 import type { BookPage, PictureBookStyle } from '../types';
 import { regeneratePageImage } from '../services/geminiService';
 import { SparklesIcon } from './icons/SparklesIcon';
+import { DownloadIcon } from './icons/DownloadIcon';
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
 
 interface BookPreviewProps {
   pages: BookPage[];
@@ -44,13 +47,14 @@ const Page: React.FC<{ page: BookPage, pageNumber: number, onRegenerate: (pageId
 
 export const BookPreview: React.FC<BookPreviewProps> = ({ pages, title, author, style, onRestart, onUpdatePageImage }) => {
   const [regeneratingPageId, setRegeneratingPageId] = useState<number | null>(null);
+  const [isDownloading, setIsDownloading] = useState<boolean>(false);
 
   const handleRegenerate = useCallback(async (pageId: number) => {
     setRegeneratingPageId(pageId);
     try {
       const pageToRegen = pages.find(p => p.id === pageId);
       if (pageToRegen) {
-        const newImageUrl = await regeneratePageImage(pageToRegen.text, pageToRegen.originalImageBase64, pageToRegen.originalImageMimeType, style);
+        const newImageUrl = await regeneratePageImage(pageToRegen.text, pageToRegen.originalImages, style);
         onUpdatePageImage(pageId, newImageUrl);
       }
     } catch (error) {
@@ -60,6 +64,68 @@ export const BookPreview: React.FC<BookPreviewProps> = ({ pages, title, author, 
       setRegeneratingPageId(null);
     }
   }, [pages, style, onUpdatePageImage]);
+
+  const handleDownload = useCallback(async () => {
+    setIsDownloading(true);
+    try {
+      const pdf = new jsPDF('p', 'pt', 'a4');
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
+
+      const captureContainer = document.createElement('div');
+      Object.assign(captureContainer.style, {
+        position: 'absolute',
+        left: '-9999px',
+        top: '0',
+        width: '595px',
+        height: '842px',
+        backgroundColor: 'white',
+        display: 'flex',
+        flexDirection: 'column',
+        fontFamily: '"Noto Sans JP", sans-serif',
+        boxSizing: 'border-box',
+        padding: '40px',
+      });
+      document.body.appendChild(captureContainer);
+
+      // Title Page
+      captureContainer.innerHTML = `
+        <div style="text-align: center; display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100%; font-family: 'Mochiy Pop One', sans-serif;">
+          <h1 style="font-size: 42px; color: #78350f; margin: 0; word-break: break-word;">${title}</h1>
+          ${author ? `<p style="font-size: 22px; color: #4b5563; margin-top: 24px;">さく：${author}</p>` : ''}
+        </div>`;
+      const titleCanvas = await html2canvas(captureContainer, { scale: 2 });
+      pdf.addImage(titleCanvas.toDataURL('image/png', 1.0), 'PNG', 0, 0, pdfWidth, pdfHeight);
+
+      // Story Pages
+      for (let i = 0; i < pages.length; i++) {
+        const page = pages[i];
+        pdf.addPage();
+        captureContainer.innerHTML = `
+          <div style="display: flex; flex-direction: column; width: 100%; height: 100%; justify-content: space-between;">
+            <div style="flex-grow: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; margin-bottom: 20px;">
+              <img src="${page.imageUrl}" style="max-width: 100%; max-height: 100%; object-fit: contain;" />
+            </div>
+            <div style="font-size: 14pt; color: #374151; line-height: 1.6; max-height: 30%; overflow-y: auto;">
+              <p style="white-space: pre-wrap;">${page.text}</p>
+            </div>
+            <div style="text-align: center; font-size: 10pt; color: #6b7280; padding-top: 15px;">
+              <p>${i + 1}</p>
+            </div>
+          </div>`;
+        const pageCanvas = await html2canvas(captureContainer, { scale: 2 });
+        pdf.addImage(pageCanvas.toDataURL('image/png', 1.0), 'PNG', 0, 0, pdfWidth, pdfHeight);
+      }
+
+      document.body.removeChild(captureContainer);
+      pdf.save(`${title.replace(/ /g, '_') || 'AI絵本'}.pdf`);
+    } catch (err) {
+      console.error("PDF generation failed:", err);
+      alert('PDFの生成に失敗しました。');
+    } finally {
+      setIsDownloading(false);
+    }
+  }, [pages, title, author]);
 
   return (
     <div className="w-full max-w-7xl mx-auto p-4 sm:p-6">
@@ -80,12 +146,20 @@ export const BookPreview: React.FC<BookPreviewProps> = ({ pages, title, author, 
         ))}
       </div>
 
-      <div className="mt-12 text-center">
+      <div className="mt-12 flex flex-col sm:flex-row justify-center items-center gap-4">
         <button
           onClick={onRestart}
-          className="px-8 py-3 bg-amber-500 text-white font-bold rounded-full hover:bg-amber-600 transition-transform transform hover:scale-105 shadow-lg text-lg"
+          className="px-8 py-3 bg-amber-500 text-white font-bold rounded-full hover:bg-amber-600 transition-transform transform hover:scale-105 shadow-lg text-lg w-full sm:w-auto"
         >
           もう一度つくる
+        </button>
+        <button
+          onClick={handleDownload}
+          disabled={isDownloading}
+          className="flex items-center justify-center px-8 py-3 bg-orange-500 text-white font-bold rounded-full hover:bg-orange-600 transition-transform transform hover:scale-105 shadow-lg text-lg disabled:opacity-70 disabled:cursor-not-allowed w-full sm:w-auto"
+        >
+          <DownloadIcon className="w-5 h-5 mr-2" />
+          {isDownloading ? '作成中...' : '絵本をダウンロード'}
         </button>
       </div>
     </div>

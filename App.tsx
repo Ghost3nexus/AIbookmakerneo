@@ -1,4 +1,6 @@
-import React, { useState, useCallback, useMemo } from 'react';
+
+
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import { Header } from './components/Header';
 import { LoadingIndicator } from './components/LoadingIndicator';
 import { BookPreview } from './components/BookPreview';
@@ -26,23 +28,30 @@ export default function App() {
   const [title, setTitle] = useState('');
   const [author, setAuthor] = useState('');
   const [theme, setTheme] = useState('');
-  const [characterImage, setCharacterImage] = useState<File | null>(null);
+  const [characterImages, setCharacterImages] = useState<File[]>([]);
   const [selectedStyle, setSelectedStyle] = useState<PictureBookStyle>(STYLES[0].id);
   const [bookPages, setBookPages] = useState<BookPage[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [numPages, setNumPages] = useState<number>(4);
 
-  const imagePreview = useMemo(() => characterImage ? URL.createObjectURL(characterImage) : null, [characterImage]);
+  const imagePreviews = useMemo(() => characterImages.map(file => URL.createObjectURL(file)), [characterImages]);
+
+  useEffect(() => {
+    // Clean up object URLs to avoid memory leaks
+    return () => {
+      imagePreviews.forEach(url => URL.revokeObjectURL(url));
+    };
+  }, [imagePreviews]);
 
   const handleCreateBook = useCallback(async () => {
-    if (!title || !theme || !characterImage) {
-      setError('タイトル、おはなしのテーマ、主人公の絵をすべて入力してください。');
+    if (!title || !theme || characterImages.length === 0) {
+      setError('タイトル、おはなしのテーマ、キャラクターの絵をすべて入力してください。');
       return;
     }
     setError(null);
     setStep(AppStep.Loading);
     try {
-      const pages = await generatePictureBook(theme, characterImage, selectedStyle, numPages);
+      const pages = await generatePictureBook(theme, characterImages, selectedStyle, numPages);
       if (pages.length === 0) {
         throw new Error('絵本のページを生成できませんでした。もう一度試してください。');
       }
@@ -52,13 +61,13 @@ export default function App() {
       setError((err as Error).message);
       setStep(AppStep.Input);
     }
-  }, [theme, characterImage, selectedStyle, title, numPages]);
+  }, [theme, characterImages, selectedStyle, title, numPages]);
   
   const handleRestart = useCallback(() => {
     setTitle('');
     setAuthor('');
     setTheme('');
-    setCharacterImage(null);
+    setCharacterImages([]);
     setSelectedStyle(STYLES[0].id);
     setBookPages([]);
     setError(null);
@@ -71,6 +80,11 @@ export default function App() {
         page.id === pageId ? { ...page, imageUrl: newImageUrl } : page
     ));
   }, []);
+
+  const handleRemoveImage = (indexToRemove: number) => {
+    setCharacterImages(prevImages => prevImages.filter((_, index) => index !== indexToRemove));
+  };
+
 
   const renderContent = () => {
     switch (step) {
@@ -124,12 +138,34 @@ export default function App() {
                     <textarea value={theme} onChange={e => setTheme(e.target.value)} rows={4} maxLength={STORY_CHAR_LIMIT} className="w-full p-2 border border-gray-300 rounded-md focus:ring-amber-500 focus:border-amber-500" placeholder="例：空を飛びたい恐竜の冒険"></textarea>
                     <p className="text-right text-sm text-gray-500">{theme.length} / {STORY_CHAR_LIMIT}</p>
                 </Card>
-                <Card title="主人公の絵" icon={<ImageIcon className="w-7 h-7 text-amber-500" />}>
-                    <p className="text-sm text-gray-600 mb-2">お話の主人公になるキャラクターの絵をアップロードしてください。</p>
-                    <input type="file" accept="image/png, image/jpeg" onChange={e => setCharacterImage(e.target.files ? e.target.files[0] : null)} className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-amber-50 file:text-amber-700 hover:file:bg-amber-100" />
-                    {imagePreview && (
-                        <div className="mt-4">
-                            <img src={imagePreview} className="w-full h-auto object-cover rounded-md aspect-square" alt="preview" />
+                <Card title="キャラクターの絵" icon={<ImageIcon className="w-7 h-7 text-amber-500" />}>
+                    <p className="text-sm text-gray-600 mb-2">お話に登場するキャラクターの絵を1枚以上アップロードしてください。</p>
+                    <input 
+                      type="file" 
+                      multiple
+                      accept="image/png, image/jpeg" 
+                      onChange={e => {
+                          if (e.target.files) {
+                            setCharacterImages(prevImages => [...prevImages, ...Array.from(e.target.files!)]);
+                          }
+                      }}
+                      className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-amber-50 file:text-amber-700 hover:file:bg-amber-100" />
+                    {imagePreviews.length > 0 && (
+                        <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-2">
+                          {imagePreviews.map((src, index) => (
+                            <div key={src} className="aspect-square relative group">
+                              <img src={src} className="w-full h-full object-cover rounded-md" alt={`キャラクターのプレビュー ${index + 1}`} />
+                              <button
+                                onClick={() => handleRemoveImage(index)}
+                                className="absolute top-1 right-1 bg-black/60 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity focus:opacity-100"
+                                aria-label={`画像を削除 ${index + 1}`}
+                              >
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="3">
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                              </button>
+                            </div>
+                          ))}
                         </div>
                     )}
                 </Card>
