@@ -1,4 +1,5 @@
 
+
 import { GoogleGenAI, Modality, Type } from "@google/genai";
 import type { PictureBookStyle, BookPage, OriginalImage } from '../types';
 
@@ -18,7 +19,7 @@ const getAiInstance = (): GoogleGenAI => {
     const apiKey = process.env.API_KEY;
     if (!apiKey) {
         // This error will be caught by the calling function and displayed to the user in the UI.
-        throw new Error("APIキーが設定されていません。環境変数にAPI_KEYを設定してください。");
+        throw new Error("APIキーが設定されていません。Vercelの環境変数にAPI_KEYが正しく設定されているか確認してください。");
     }
     ai = new GoogleGenAI({ apiKey });
     return ai;
@@ -30,33 +31,28 @@ const INITIAL_DELAY_MS = 2000;
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+type ApiErrorType = 'auth' | 'retryable' | 'unknown';
+
 /**
- * Robustly checks if an error is a retryable 503 "model overloaded" error.
- * This version avoids `instanceof Error` to handle custom error objects thrown by the SDK
- * and defensively checks the structure of the error object and its message property.
- * @param error The error object to check, of unknown type.
- * @returns True if the error is a retryable 503 error, false otherwise.
+ * Classifies API errors based on their content to provide better user feedback.
+ * @param error The error object from a try-catch block.
+ * @returns A string indicating the type of error.
  */
-const isRetryableError = (error: unknown): boolean => {
-  // Check if error is an object with a string 'message' property
-  if (typeof error === 'object' && error !== null && 'message' in error && typeof (error as { message: unknown }).message === 'string') {
-    const message = (error as { message: string }).message;
-    
-    // Try to parse the message as JSON, which is the most reliable method
-    try {
-      const parsed = JSON.parse(message);
-      // Use == for a more lenient check (handles "503" vs 503)
-      if (parsed?.error?.code == 503) {
-        return true;
-      }
-    } catch {
-      // If JSON parsing fails, fall back to a simple but effective string check
-      if (message.includes('503') || message.includes('overloaded')) {
-        return true;
-      }
+const classifyApiError = (error: unknown): ApiErrorType => {
+    if (typeof error === 'object' && error !== null && 'message' in error && typeof (error as { message: unknown }).message === 'string') {
+        const message = (error as { message: string }).message.toLowerCase();
+
+        // Check for specific authentication error messages from Google's API
+        if (message.includes('api key not valid') || message.includes('permission denied') || message.includes('[400]')) {
+            return 'auth';
+        }
+        
+        // Check for retryable server-side errors
+        if (message.includes('503') || message.includes('overloaded') || message.includes('try again later')) {
+            return 'retryable';
+        }
     }
-  }
-  return false;
+    return 'unknown';
 };
 
 
@@ -112,12 +108,17 @@ const generateStory = async (theme: string, numPages: number): Promise<string[]>
             throw new Error("AIが物語を生成できませんでした。");
 
         } catch (error) {
-            if (isRetryableError(error) && attempt < MAX_RETRIES - 1) {
+            const errorType = classifyApiError(error);
+            if (errorType === 'retryable' && attempt < MAX_RETRIES - 1) {
                 console.warn(`Story generation failed (attempt ${attempt + 1}/${MAX_RETRIES}). Retrying in ${INITIAL_DELAY_MS * 2 ** attempt}ms...`);
                 await sleep(INITIAL_DELAY_MS * 2 ** attempt);
-            } else {
+            } else if (errorType === 'auth') {
+                console.error("Authentication error during story generation:", error);
+                throw new Error("APIキーの認証に失敗しました。Vercelの環境変数に正しいAPIキーが設定されているか確認してください。");
+            }
+            else {
                 console.error("Error generating story after retries:", error);
-                 throw new Error("物語の生成に失敗しました。AIが混み合っている可能性があるため、しばらくしてからもう一度お試しください。");
+                throw new Error("物語の生成に失敗しました。AIが混み合っている可能性があるため、しばらくしてからもう一度お試しください。");
             }
         }
     }
@@ -195,9 +196,13 @@ export const generatePictureBook = async (
                 console.warn(`DEBUG: [Page ${i + 1}] Image part not found in response. Retrying... (Attempt ${attempt + 1})`, response);
             }
         } catch (error) {
-            if (isRetryableError(error) && attempt < MAX_RETRIES - 1) {
+            const errorType = classifyApiError(error);
+            if (errorType === 'retryable' && attempt < MAX_RETRIES - 1) {
                 console.warn(`Page ${i + 1} generation failed (attempt ${attempt + 1}/${MAX_RETRIES}). Retrying in ${INITIAL_DELAY_MS * 2 ** attempt}ms...`);
                 await sleep(INITIAL_DELAY_MS * 2 ** attempt);
+            } else if (errorType === 'auth') {
+                 console.error(`Authentication error on page ${i + 1}:`, error);
+                 throw new Error("APIキーの認証に失敗しました。Vercelの環境変数に正しいAPIキーが設定されているか確認してください。");
             } else {
                  console.error(`Error generating page ${i + 1} after retries:`, error);
                  throw new Error(`ページ ${i + 1} の生成中にエラーが発生しました。AIが混み合っている可能性があります。`);
@@ -256,12 +261,16 @@ export const regeneratePageImage = async (
             }
             throw new Error('画像の再生成で有効な画像部分が返されませんでした。');
         } catch (error) {
-             if (isRetryableError(error) && attempt < MAX_RETRIES - 1) {
+            const errorType = classifyApiError(error);
+            if (errorType === 'retryable' && attempt < MAX_RETRIES - 1) {
                 console.warn(`Image regeneration failed (attempt ${attempt + 1}/${MAX_RETRIES}). Retrying in ${INITIAL_DELAY_MS * 2 ** attempt}ms...`);
                 await sleep(INITIAL_DELAY_MS * 2 ** attempt);
+            } else if (errorType === 'auth') {
+                console.error("Authentication error during image regeneration:", error);
+                throw new Error("APIキーの認証に失敗しました。Vercelの環境変数に正しいAPIキーが設定されているか確認してください。");
             } else {
                 console.error("Error regenerating image after retries:", error);
-                 throw new Error("画像の再生成に失敗しました。AIが混み合っている可能性があるため、しばらくしてからもう一度お試しください。");
+                throw new Error("画像の再生成に失敗しました。AIが混み合っている可能性があるため、しばらくしてからもう一度お試しください。");
             }
         }
     }
