@@ -42,8 +42,8 @@ const classifyApiError = (error: unknown): ApiErrorType => {
     if (typeof error === 'object' && error !== null && 'message' in error && typeof (error as { message: unknown }).message === 'string') {
         const message = (error as { message: string }).message.toLowerCase();
 
-        // Check for specific authentication error messages from Google's API
-        if (message.includes('api key not valid') || message.includes('permission denied') || message.includes('[400]')) {
+        // Check for specific authentication/permission error messages from Google's API
+        if (message.includes('api key') || message.includes('permission denied') || message.includes('[400]') || message.includes('[403]')) {
             return 'auth';
         }
         
